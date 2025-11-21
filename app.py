@@ -3,7 +3,14 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from pgmpy.estimators import PC, HillClimbSearch, BicScore
+from pgmpy.estimators import PC, HillClimbSearch
+try:
+    from pgmpy.scoring import BicScore
+except ImportError:
+    try:
+        from pgmpy.estimators.score import BicScore
+    except ImportError:
+        from pgmpy.estimators import BicScore
 import networkx as nx
 from io import BytesIO
 from datetime import datetime
