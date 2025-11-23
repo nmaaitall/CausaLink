@@ -3,14 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from pgmpy.estimators import PC, HillClimbSearch
-try:
-    from pgmpy.scoring import BicScore
-except ImportError:
-    try:
-        from pgmpy.estimators.score import BicScore
-    except ImportError:
-        from pgmpy.estimators import BicScore
+from pgmpy.estimators import PC
 import networkx as nx
 from io import BytesIO
 from datetime import datetime
@@ -62,7 +55,7 @@ st.markdown('<p class="sub-header">Causal Inference Platform - Discover True Cau
             unsafe_allow_html=True)
 
 st.sidebar.header("Navigation")
-page = st.sidebar.radio("Select Page", ["Data Upload", "Data Exploration", "Causal Analysis", "Algorithm Comparison"])
+page = st.sidebar.radio("Select Page", ["Data Upload", "Data Exploration", "Causal Analysis"])
 
 if page == "Data Upload":
     st.header("Step 1: Upload Your Dataset")
@@ -238,15 +231,10 @@ elif page == "Causal Analysis":
                 )
 
             with col2:
-                analysis_method = st.selectbox(
-                    "Select Algorithm:",
-                    ["PC Algorithm", "Hill Climb Search"]
-                )
-
                 significance_level = st.slider(
                     "Significance Level:",
                     0.01, 0.10, 0.05, 0.01
-                ) if analysis_method == "PC Algorithm" else None
+                )
 
             if len(selected_vars) >= 2:
 
@@ -260,21 +248,11 @@ elif page == "Causal Analysis":
                             st.warning("Limited data may affect accuracy. Consider using more data.")
 
                         try:
-                            if analysis_method == "PC Algorithm":
-
-                                pc = PC(df_subset)
-                                model = pc.estimate(significance_level=significance_level)
-                                edges = model.edges()
-                                algorithm_name = "PC Algorithm"
-                                node_color = 'lightblue'
-
-                            else:
-
-                                hc = HillClimbSearch(df_subset)
-                                model = hc.estimate(scoring_method=BicScore(df_subset))
-                                edges = model.edges()
-                                algorithm_name = "Hill Climb Search"
-                                node_color = 'lightcoral'
+                            pc = PC(df_subset)
+                            model = pc.estimate(significance_level=significance_level)
+                            edges = list(model.edges())
+                            algorithm_name = "PC Algorithm"
+                            node_color = 'lightblue'
 
                             st.session_state['last_analysis'] = {
                                 'edges': edges,
@@ -324,7 +302,7 @@ elif page == "Causal Analysis":
 
                             st.session_state['causal_fig'] = fig
 
-                            col1, col2, col3 = st.columns(3)
+                            col1, col2 = st.columns(2)
 
                             with col1:
                                 png_buf = export_graph_as_png(fig)
@@ -364,121 +342,6 @@ elif page == "Causal Analysis":
                             st.write("Try selecting different variables or adjusting parameters")
             else:
                 st.info("Please select at least 2 variables to begin analysis")
-
-elif page == "Algorithm Comparison":
-    st.header("Step 4: Compare Multiple Algorithms")
-
-    if 'df' not in st.session_state:
-        st.warning("Please upload a dataset first in the Data Upload page")
-    else:
-        df = st.session_state['original_df'].copy()
-
-        st.write("Compare different causal discovery algorithms on the same data:")
-
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-
-        if len(numeric_cols) < 2:
-            st.error("Need at least 2 numeric columns for comparison")
-        else:
-            selected_vars = st.multiselect(
-                "Choose variables for comparison:",
-                numeric_cols,
-                default=numeric_cols[:min(5, len(numeric_cols))]
-            )
-
-            if len(selected_vars) >= 2:
-
-                if st.button("Run Algorithm Comparison", use_container_width=True):
-
-                    with st.spinner("Running multiple algorithms..."):
-
-                        df_subset = df[selected_vars].dropna()
-
-                        results = {}
-
-                        try:
-                            pc = PC(df_subset)
-                            model_pc = pc.estimate(significance_level=0.05)
-                            results['PC Algorithm'] = list(model_pc.edges())
-                        except:
-                            results['PC Algorithm'] = []
-
-                        try:
-                            hc = HillClimbSearch(df_subset)
-                            model_hc = hc.estimate(scoring_method=BicScore(df_subset))
-                            results['Hill Climb Search'] = list(model_hc.edges())
-                        except:
-                            results['Hill Climb Search'] = []
-
-                        st.success("Comparison completed!")
-
-                        col1, col2 = st.columns(2)
-
-                        with col1:
-                            st.write("### PC Algorithm Results")
-                            st.write(f"Edges found: {len(results['PC Algorithm'])}")
-                            if len(results['PC Algorithm']) > 0:
-                                for edge in results['PC Algorithm']:
-                                    st.write(f"- {edge[0]} → {edge[1]}")
-                            else:
-                                st.info("No edges found")
-
-                            fig1, ax1 = plt.subplots(figsize=(10, 8))
-                            G1 = nx.DiGraph()
-                            G1.add_edges_from(results['PC Algorithm'])
-                            pos1 = nx.spring_layout(G1, k=2, iterations=50, seed=42)
-                            nx.draw_networkx_nodes(G1, pos1, node_color='lightblue',
-                                                   node_size=3000, ax=ax1, alpha=0.9)
-                            nx.draw_networkx_labels(G1, pos1, font_size=10,
-                                                    font_weight='bold', ax=ax1)
-                            nx.draw_networkx_edges(G1, pos1, edge_color='gray',
-                                                   arrows=True, arrowsize=20,
-                                                   arrowstyle='->', width=2, ax=ax1)
-                            ax1.set_title("PC Algorithm", fontsize=14)
-                            ax1.axis('off')
-                            st.pyplot(fig1)
-
-                        with col2:
-                            st.write("### Hill Climb Search Results")
-                            st.write(f"Edges found: {len(results['Hill Climb Search'])}")
-                            if len(results['Hill Climb Search']) > 0:
-                                for edge in results['Hill Climb Search']:
-                                    st.write(f"- {edge[0]} → {edge[1]}")
-                            else:
-                                st.info("No edges found")
-
-                            fig2, ax2 = plt.subplots(figsize=(10, 8))
-                            G2 = nx.DiGraph()
-                            G2.add_edges_from(results['Hill Climb Search'])
-                            pos2 = nx.spring_layout(G2, k=2, iterations=50, seed=42)
-                            nx.draw_networkx_nodes(G2, pos2, node_color='lightcoral',
-                                                   node_size=3000, ax=ax2, alpha=0.9)
-                            nx.draw_networkx_labels(G2, pos2, font_size=10,
-                                                    font_weight='bold', ax=ax2)
-                            nx.draw_networkx_edges(G2, pos2, edge_color='gray',
-                                                   arrows=True, arrowsize=20,
-                                                   arrowstyle='->', width=2, ax=ax2)
-                            ax2.set_title("Hill Climb Search", fontsize=14)
-                            ax2.axis('off')
-                            st.pyplot(fig2)
-
-                        st.write("### Comparison Summary")
-
-                        comparison_df = pd.DataFrame({
-                            'Algorithm': ['PC Algorithm', 'Hill Climb Search'],
-                            'Edges Found': [len(results['PC Algorithm']), len(results['Hill Climb Search'])],
-                            'Approach': ['Constraint-based', 'Score-based']
-                        })
-                        st.dataframe(comparison_df, use_container_width=True)
-
-                        common_edges = set(results['PC Algorithm']).intersection(set(results['Hill Climb Search']))
-                        st.write(f"**Common edges found by both algorithms: {len(common_edges)}**")
-                        if len(common_edges) > 0:
-                            st.write("These relationships are more likely to be true causal relationships:")
-                            for edge in common_edges:
-                                st.write(f"- {edge[0]} → {edge[1]}")
-            else:
-                st.info("Please select at least 2 variables to begin comparison")
 
 st.sidebar.markdown("---")
 st.sidebar.write("### About CausaLink")
