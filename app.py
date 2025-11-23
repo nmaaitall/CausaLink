@@ -3,7 +3,14 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from pgmpy.estimators import PC
+from pgmpy.estimators import PC, HillClimbSearch
+try:
+    from pgmpy.scoring import BicScore
+except ImportError:
+    try:
+        from pgmpy.estimators.score import BicScore
+    except ImportError:
+        from pgmpy.estimators import BicScore
 import networkx as nx
 from io import BytesIO
 from datetime import datetime
@@ -33,6 +40,12 @@ st.markdown("""
         color: #7f7f7f;
         margin-bottom: 2rem;
     }
+    .metric-card {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        text-align: center;
+    }
     .stButton>button {
         width: 100%;
         background-color: #1f77b4;
@@ -49,23 +62,16 @@ st.markdown('<p class="sub-header">Causal Inference Platform - Discover True Cau
             unsafe_allow_html=True)
 
 st.sidebar.header("Navigation")
-page = st.sidebar.radio("Select Page", ["Data Upload", "Data Exploration", "Causal Analysis"])
-
-if 'df' in st.session_state and st.session_state['df'] is not None:
-    st.sidebar.success("Dataset loaded")
-    st.sidebar.metric("Rows", f"{st.session_state['df'].shape[0]:,}")
-    st.sidebar.metric("Columns", st.session_state['df'].shape[1])
-    numeric_count = len(st.session_state['df'].select_dtypes(include=[np.number]).columns)
-    st.sidebar.metric("Numeric Columns", numeric_count)
+page = st.sidebar.radio("Select Page", ["Data Upload", "Data Exploration", "Causal Analysis", "Algorithm Comparison"])
 
 if page == "Data Upload":
     st.header("Step 1: Upload Your Dataset")
 
     with st.expander("Dataset Requirements", expanded=False):
         st.write("- File format: CSV")
-        st.write("- Maximum 10,000 rows")
-        st.write("- Maximum 50 columns")
-        st.write("- Text columns will be automatically converted to numeric codes")
+        st.write("- Minimum 100 rows recommended")
+        st.write("- At least 2 numeric columns required")
+        st.write("- Missing values will be handled automatically")
 
     uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
@@ -77,91 +83,33 @@ if page == "Data Upload":
 
         df = df.dropna(axis=1, how='all')
 
-        original_types = df.dtypes.to_dict()
+        st.session_state['df'] = df
+        st.session_state['original_df'] = df.copy()
 
-        for col in df.columns:
-            if df[col].dtype == 'object':
-                try:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-                except:
-                    pass
-
-        for col in df.columns:
-            if df[col].dtype == 'object':
-                df[col] = df[col].astype('category').cat.codes.astype('float64')
-                df[col] = df[col].replace(-1.0, np.nan)
-
-        if df.shape[0] > 10000:
-            st.error(f"Dataset too large! Your file has {df.shape[0]:,} rows. Maximum allowed is 10,000 rows.")
-            st.info("Please filter your data and try again with a smaller file.")
-        elif df.shape[1] > 50:
-            st.error(f"Too many columns! Your file has {df.shape[1]} columns. Maximum allowed is 50 columns.")
-            st.info("Please select fewer columns and try again.")
-        else:
-            st.session_state['df'] = df
-            st.session_state['original_df'] = df.copy()
-            st.session_state['original_types'] = original_types
-
-            st.success("File uploaded successfully! Text columns converted to numeric codes.")
-
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Total Rows", f"{df.shape[0]:,}")
-            with col2:
-                st.metric("Total Columns", df.shape[1])
-            with col3:
-                st.metric("Missing Values", f"{df.isnull().sum().sum():,}")
-            with col4:
-                numeric_count = len(df.select_dtypes(include=[np.number]).columns)
-                st.metric("Numeric Columns", numeric_count)
-
-            st.write("Dataset Preview:")
-            st.dataframe(
-                df.head(20),
-                use_container_width=True,
-                height=400
-            )
-
-            st.write("Column Information:")
-            col_info = []
-            for col in df.columns:
-                original_type = str(original_types.get(col, 'unknown'))
-                current_type = str(df[col].dtype)
-                converted = "(converted)" if original_type == 'object' and current_type != 'object' else ""
-
-                col_info.append({
-                    'Column': col,
-                    'Original Type': original_type,
-                    'Current Type': current_type + " " + converted,
-                    'Non-Null': df[col].count(),
-                    'Null': df[col].isnull().sum(),
-                    'Unique': df[col].nunique()
-                })
-
-            col_info_df = pd.DataFrame(col_info)
-            st.dataframe(col_info_df, use_container_width=True, height=400)
-
-            if any('converted' in str(x) for x in col_info_df['Current Type']):
-                st.info("Text columns were automatically converted to numeric codes for analysis.")
-
-    elif 'df' in st.session_state and st.session_state['df'] is not None:
-        st.info("Dataset already loaded. Upload a new file to replace it.")
-
-        df = st.session_state['df']
+        st.success("File uploaded successfully!")
 
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Total Rows", f"{df.shape[0]:,}")
+            st.metric("Total Rows", df.shape[0])
         with col2:
             st.metric("Total Columns", df.shape[1])
         with col3:
-            st.metric("Missing Values", f"{df.isnull().sum().sum():,}")
+            st.metric("Missing Values", df.isnull().sum().sum())
         with col4:
             numeric_count = len(df.select_dtypes(include=[np.number]).columns)
             st.metric("Numeric Columns", numeric_count)
 
-        st.write("Current Dataset Preview:")
-        st.dataframe(df.head(20), use_container_width=True, height=400)
+        st.write("Dataset Preview:")
+        st.dataframe(df.head(10), use_container_width=True)
+
+        st.write("Column Information:")
+        col_info = pd.DataFrame({
+            'Column': df.columns,
+            'Type': df.dtypes.values,
+            'Non-Null Count': df.count().values,
+            'Unique Values': [df[col].nunique() for col in df.columns]
+        })
+        st.dataframe(col_info, use_container_width=True)
 
     else:
         st.info("Please upload your CSV file to begin analysis")
@@ -169,7 +117,7 @@ if page == "Data Upload":
 elif page == "Data Exploration":
     st.header("Step 2: Explore Your Data")
 
-    if 'df' not in st.session_state or st.session_state['df'] is None:
+    if 'df' not in st.session_state:
         st.warning("Please upload a dataset first in the Data Upload page")
     else:
         df = st.session_state['df']
@@ -178,25 +126,15 @@ elif page == "Data Exploration":
 
         with tab1:
             st.write("Statistical Summary:")
-            numeric_df = df.select_dtypes(include=[np.number])
-            if len(numeric_df.columns) > 0:
-                st.dataframe(numeric_df.describe(), use_container_width=True)
-            else:
-                st.error("No numeric columns found in dataset")
+            st.dataframe(df.describe(), use_container_width=True)
 
-            st.write("Data Types Summary:")
-            type_summary = pd.DataFrame({
-                'Data Type': df.dtypes.value_counts().index.astype(str),
-                'Count': df.dtypes.value_counts().values
-            })
-            st.dataframe(type_summary, use_container_width=True)
-
+            st.write("Data Types Distribution:")
+            type_counts = df.dtypes.value_counts()
             fig, ax = plt.subplots(figsize=(8, 4))
-            ax.bar(type_summary['Data Type'], type_summary['Count'], color='skyblue')
+            type_counts.plot(kind='bar', ax=ax, color='skyblue')
             ax.set_title("Column Types Distribution")
             ax.set_xlabel("Data Type")
             ax.set_ylabel("Count")
-            plt.xticks(rotation=45, ha='right')
             st.pyplot(fig)
 
         with tab2:
@@ -223,7 +161,7 @@ elif page == "Data Exploration":
                     ax.set_title(f"Box Plot of {selected_col}")
                     st.pyplot(fig)
             else:
-                st.error("No numeric columns found.")
+                st.warning("No numeric columns found in dataset")
 
         with tab3:
             st.write("Correlation Analysis:")
@@ -248,7 +186,7 @@ elif page == "Data Exploration":
                 top_corr = corr_pairs.abs().sort_values(ascending=False).head(10)
                 st.dataframe(top_corr, use_container_width=True)
             else:
-                st.error("Need at least 2 numeric columns for correlation analysis")
+                st.warning("Need at least 2 numeric columns for correlation analysis")
 
         with tab4:
             st.write("Missing Data Analysis:")
@@ -278,7 +216,7 @@ elif page == "Data Exploration":
 elif page == "Causal Analysis":
     st.header("Step 3: Causal Discovery")
 
-    if 'df' not in st.session_state or st.session_state['df'] is None:
+    if 'df' not in st.session_state:
         st.warning("Please upload a dataset first in the Data Upload page")
     else:
         df = st.session_state['original_df'].copy()
@@ -288,8 +226,7 @@ elif page == "Causal Analysis":
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
 
         if len(numeric_cols) < 2:
-            st.error("Need at least 2 numeric columns for causal analysis.")
-            st.info("Your dataset needs numeric columns. Text columns should be automatically converted on upload.")
+            st.error("Need at least 2 numeric columns for causal analysis")
         else:
             col1, col2 = st.columns([2, 1])
 
@@ -301,10 +238,15 @@ elif page == "Causal Analysis":
                 )
 
             with col2:
+                analysis_method = st.selectbox(
+                    "Select Algorithm:",
+                    ["PC Algorithm", "Hill Climb Search"]
+                )
+
                 significance_level = st.slider(
                     "Significance Level:",
                     0.01, 0.10, 0.05, 0.01
-                )
+                ) if analysis_method == "PC Algorithm" else None
 
             if len(selected_vars) >= 2:
 
@@ -318,11 +260,21 @@ elif page == "Causal Analysis":
                             st.warning("Limited data may affect accuracy. Consider using more data.")
 
                         try:
-                            pc = PC(df_subset)
-                            model = pc.estimate(significance_level=significance_level)
-                            edges = list(model.edges())
-                            algorithm_name = "PC Algorithm"
-                            node_color = 'lightblue'
+                            if analysis_method == "PC Algorithm":
+
+                                pc = PC(df_subset)
+                                model = pc.estimate(significance_level=significance_level)
+                                edges = model.edges()
+                                algorithm_name = "PC Algorithm"
+                                node_color = 'lightblue'
+
+                            else:
+
+                                hc = HillClimbSearch(df_subset)
+                                model = hc.estimate(scoring_method=BicScore(df_subset))
+                                edges = model.edges()
+                                algorithm_name = "Hill Climb Search"
+                                node_color = 'lightcoral'
 
                             st.session_state['last_analysis'] = {
                                 'edges': edges,
@@ -372,7 +324,7 @@ elif page == "Causal Analysis":
 
                             st.session_state['causal_fig'] = fig
 
-                            col1, col2 = st.columns(2)
+                            col1, col2, col3 = st.columns(3)
 
                             with col1:
                                 png_buf = export_graph_as_png(fig)
@@ -412,6 +364,121 @@ elif page == "Causal Analysis":
                             st.write("Try selecting different variables or adjusting parameters")
             else:
                 st.info("Please select at least 2 variables to begin analysis")
+
+elif page == "Algorithm Comparison":
+    st.header("Step 4: Compare Multiple Algorithms")
+
+    if 'df' not in st.session_state:
+        st.warning("Please upload a dataset first in the Data Upload page")
+    else:
+        df = st.session_state['original_df'].copy()
+
+        st.write("Compare different causal discovery algorithms on the same data:")
+
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+
+        if len(numeric_cols) < 2:
+            st.error("Need at least 2 numeric columns for comparison")
+        else:
+            selected_vars = st.multiselect(
+                "Choose variables for comparison:",
+                numeric_cols,
+                default=numeric_cols[:min(5, len(numeric_cols))]
+            )
+
+            if len(selected_vars) >= 2:
+
+                if st.button("Run Algorithm Comparison", use_container_width=True):
+
+                    with st.spinner("Running multiple algorithms..."):
+
+                        df_subset = df[selected_vars].dropna()
+
+                        results = {}
+
+                        try:
+                            pc = PC(df_subset)
+                            model_pc = pc.estimate(significance_level=0.05)
+                            results['PC Algorithm'] = list(model_pc.edges())
+                        except:
+                            results['PC Algorithm'] = []
+
+                        try:
+                            hc = HillClimbSearch(df_subset)
+                            model_hc = hc.estimate(scoring_method=BicScore(df_subset))
+                            results['Hill Climb Search'] = list(model_hc.edges())
+                        except:
+                            results['Hill Climb Search'] = []
+
+                        st.success("Comparison completed!")
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            st.write("### PC Algorithm Results")
+                            st.write(f"Edges found: {len(results['PC Algorithm'])}")
+                            if len(results['PC Algorithm']) > 0:
+                                for edge in results['PC Algorithm']:
+                                    st.write(f"- {edge[0]} → {edge[1]}")
+                            else:
+                                st.info("No edges found")
+
+                            fig1, ax1 = plt.subplots(figsize=(10, 8))
+                            G1 = nx.DiGraph()
+                            G1.add_edges_from(results['PC Algorithm'])
+                            pos1 = nx.spring_layout(G1, k=2, iterations=50, seed=42)
+                            nx.draw_networkx_nodes(G1, pos1, node_color='lightblue',
+                                                   node_size=3000, ax=ax1, alpha=0.9)
+                            nx.draw_networkx_labels(G1, pos1, font_size=10,
+                                                    font_weight='bold', ax=ax1)
+                            nx.draw_networkx_edges(G1, pos1, edge_color='gray',
+                                                   arrows=True, arrowsize=20,
+                                                   arrowstyle='->', width=2, ax=ax1)
+                            ax1.set_title("PC Algorithm", fontsize=14)
+                            ax1.axis('off')
+                            st.pyplot(fig1)
+
+                        with col2:
+                            st.write("### Hill Climb Search Results")
+                            st.write(f"Edges found: {len(results['Hill Climb Search'])}")
+                            if len(results['Hill Climb Search']) > 0:
+                                for edge in results['Hill Climb Search']:
+                                    st.write(f"- {edge[0]} → {edge[1]}")
+                            else:
+                                st.info("No edges found")
+
+                            fig2, ax2 = plt.subplots(figsize=(10, 8))
+                            G2 = nx.DiGraph()
+                            G2.add_edges_from(results['Hill Climb Search'])
+                            pos2 = nx.spring_layout(G2, k=2, iterations=50, seed=42)
+                            nx.draw_networkx_nodes(G2, pos2, node_color='lightcoral',
+                                                   node_size=3000, ax=ax2, alpha=0.9)
+                            nx.draw_networkx_labels(G2, pos2, font_size=10,
+                                                    font_weight='bold', ax=ax2)
+                            nx.draw_networkx_edges(G2, pos2, edge_color='gray',
+                                                   arrows=True, arrowsize=20,
+                                                   arrowstyle='->', width=2, ax=ax2)
+                            ax2.set_title("Hill Climb Search", fontsize=14)
+                            ax2.axis('off')
+                            st.pyplot(fig2)
+
+                        st.write("### Comparison Summary")
+
+                        comparison_df = pd.DataFrame({
+                            'Algorithm': ['PC Algorithm', 'Hill Climb Search'],
+                            'Edges Found': [len(results['PC Algorithm']), len(results['Hill Climb Search'])],
+                            'Approach': ['Constraint-based', 'Score-based']
+                        })
+                        st.dataframe(comparison_df, use_container_width=True)
+
+                        common_edges = set(results['PC Algorithm']).intersection(set(results['Hill Climb Search']))
+                        st.write(f"**Common edges found by both algorithms: {len(common_edges)}**")
+                        if len(common_edges) > 0:
+                            st.write("These relationships are more likely to be true causal relationships:")
+                            for edge in common_edges:
+                                st.write(f"- {edge[0]} → {edge[1]}")
+            else:
+                st.info("Please select at least 2 variables to begin comparison")
 
 st.sidebar.markdown("---")
 st.sidebar.write("### About CausaLink")
