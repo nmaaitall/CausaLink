@@ -33,12 +33,6 @@ st.markdown("""
         color: #7f7f7f;
         margin-bottom: 2rem;
     }
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        text-align: center;
-    }
     .stButton>button {
         width: 100%;
         background-color: #1f77b4;
@@ -57,12 +51,18 @@ st.markdown('<p class="sub-header">Causal Inference Platform - Discover True Cau
 st.sidebar.header("Navigation")
 page = st.sidebar.radio("Select Page", ["Data Upload", "Data Exploration", "Causal Analysis"])
 
+if 'df' in st.session_state and st.session_state['df'] is not None:
+    st.sidebar.success("Dataset loaded")
+    st.sidebar.metric("Rows", f"{st.session_state['df'].shape[0]:,}")
+    st.sidebar.metric("Columns", st.session_state['df'].shape[1])
+
 if page == "Data Upload":
     st.header("Step 1: Upload Your Dataset")
 
     with st.expander("Dataset Requirements", expanded=False):
         st.write("- File format: CSV")
-        st.write("- Minimum 100 rows recommended")
+        st.write("- Maximum 10,000 rows")
+        st.write("- Maximum 50 columns")
         st.write("- At least 2 numeric columns required")
         st.write("- Missing values will be handled automatically")
 
@@ -76,33 +76,76 @@ if page == "Data Upload":
 
         df = df.dropna(axis=1, how='all')
 
-        st.session_state['df'] = df
-        st.session_state['original_df'] = df.copy()
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                try:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                except:
+                    pass
 
-        st.success("File uploaded successfully!")
+        if df.shape[0] > 10000:
+            st.error(f"Dataset too large! Your file has {df.shape[0]:,} rows. Maximum allowed is 10,000 rows.")
+            st.info("Please filter your data and try again with a smaller file.")
+        elif df.shape[1] > 50:
+            st.error(f"Too many columns! Your file has {df.shape[1]} columns. Maximum allowed is 50 columns.")
+            st.info("Please select fewer columns and try again.")
+        else:
+            st.session_state['df'] = df
+            st.session_state['original_df'] = df.copy()
+
+            st.success("File uploaded successfully!")
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Rows", f"{df.shape[0]:,}")
+            with col2:
+                st.metric("Total Columns", df.shape[1])
+            with col3:
+                st.metric("Missing Values", f"{df.isnull().sum().sum():,}")
+            with col4:
+                numeric_count = len(df.select_dtypes(include=[np.number]).columns)
+                st.metric("Numeric Columns", numeric_count)
+
+            st.write("Dataset Preview (Excel-style):")
+            st.dataframe(
+                df.head(20),
+                use_container_width=True,
+                height=400
+            )
+
+            st.write("Column Information:")
+            col_info = []
+            for col in df.columns:
+                col_info.append({
+                    'Column Name': col,
+                    'Data Type': str(df[col].dtype),
+                    'Non-Null': df[col].count(),
+                    'Null': df[col].isnull().sum(),
+                    'Unique': df[col].nunique(),
+                    'Sample Values': str(df[col].dropna().head(3).tolist())[:50] + '...'
+                })
+
+            col_info_df = pd.DataFrame(col_info)
+            st.dataframe(col_info_df, use_container_width=True, height=400)
+
+    elif 'df' in st.session_state and st.session_state['df'] is not None:
+        st.info("Dataset already loaded. Upload a new file to replace it.")
+
+        df = st.session_state['df']
 
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Total Rows", df.shape[0])
+            st.metric("Total Rows", f"{df.shape[0]:,}")
         with col2:
             st.metric("Total Columns", df.shape[1])
         with col3:
-            st.metric("Missing Values", df.isnull().sum().sum())
+            st.metric("Missing Values", f"{df.isnull().sum().sum():,}")
         with col4:
             numeric_count = len(df.select_dtypes(include=[np.number]).columns)
             st.metric("Numeric Columns", numeric_count)
 
-        st.write("Dataset Preview:")
-        st.dataframe(df.head(10), use_container_width=True)
-
-        st.write("Column Information:")
-        col_info = pd.DataFrame({
-            'Column': df.columns,
-            'Type': df.dtypes.values,
-            'Non-Null Count': df.count().values,
-            'Unique Values': [df[col].nunique() for col in df.columns]
-        })
-        st.dataframe(col_info, use_container_width=True)
+        st.write("Current Dataset Preview:")
+        st.dataframe(df.head(20), use_container_width=True, height=400)
 
     else:
         st.info("Please upload your CSV file to begin analysis")
@@ -110,7 +153,7 @@ if page == "Data Upload":
 elif page == "Data Exploration":
     st.header("Step 2: Explore Your Data")
 
-    if 'df' not in st.session_state:
+    if 'df' not in st.session_state or st.session_state['df'] is None:
         st.warning("Please upload a dataset first in the Data Upload page")
     else:
         df = st.session_state['df']
@@ -119,15 +162,25 @@ elif page == "Data Exploration":
 
         with tab1:
             st.write("Statistical Summary:")
-            st.dataframe(df.describe(), use_container_width=True)
+            numeric_df = df.select_dtypes(include=[np.number])
+            if len(numeric_df.columns) > 0:
+                st.dataframe(numeric_df.describe(), use_container_width=True)
+            else:
+                st.error("No numeric columns found in dataset")
 
-            st.write("Data Types Distribution:")
-            type_counts = df.dtypes.value_counts()
+            st.write("Data Types Summary:")
+            type_summary = pd.DataFrame({
+                'Data Type': df.dtypes.value_counts().index.astype(str),
+                'Count': df.dtypes.value_counts().values
+            })
+            st.dataframe(type_summary, use_container_width=True)
+
             fig, ax = plt.subplots(figsize=(8, 4))
-            type_counts.plot(kind='bar', ax=ax, color='skyblue')
+            ax.bar(type_summary['Data Type'], type_summary['Count'], color='skyblue')
             ax.set_title("Column Types Distribution")
             ax.set_xlabel("Data Type")
             ax.set_ylabel("Count")
+            plt.xticks(rotation=45, ha='right')
             st.pyplot(fig)
 
         with tab2:
@@ -154,7 +207,7 @@ elif page == "Data Exploration":
                     ax.set_title(f"Box Plot of {selected_col}")
                     st.pyplot(fig)
             else:
-                st.warning("No numeric columns found in dataset")
+                st.error("No numeric columns found. Please check your dataset or convert columns to numeric type.")
 
         with tab3:
             st.write("Correlation Analysis:")
@@ -179,7 +232,7 @@ elif page == "Data Exploration":
                 top_corr = corr_pairs.abs().sort_values(ascending=False).head(10)
                 st.dataframe(top_corr, use_container_width=True)
             else:
-                st.warning("Need at least 2 numeric columns for correlation analysis")
+                st.error("Need at least 2 numeric columns for correlation analysis")
 
         with tab4:
             st.write("Missing Data Analysis:")
@@ -209,7 +262,7 @@ elif page == "Data Exploration":
 elif page == "Causal Analysis":
     st.header("Step 3: Causal Discovery")
 
-    if 'df' not in st.session_state:
+    if 'df' not in st.session_state or st.session_state['df'] is None:
         st.warning("Please upload a dataset first in the Data Upload page")
     else:
         df = st.session_state['original_df'].copy()
@@ -219,7 +272,8 @@ elif page == "Causal Analysis":
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
 
         if len(numeric_cols) < 2:
-            st.error("Need at least 2 numeric columns for causal analysis")
+            st.error(
+                "Need at least 2 numeric columns for causal analysis. Please ensure your dataset has numeric values.")
         else:
             col1, col2 = st.columns([2, 1])
 
