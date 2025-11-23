@@ -64,7 +64,7 @@ if page == "Data Upload":
         st.write("- Maximum 10,000 rows")
         st.write("- Maximum 50 columns")
         st.write("- At least 2 numeric columns required")
-        st.write("- Missing values will be handled automatically")
+        st.write("- Text columns will be automatically converted to numeric")
 
     uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
@@ -82,6 +82,11 @@ if page == "Data Upload":
                     df[col] = pd.to_numeric(df[col], errors='coerce')
                 except:
                     pass
+
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                df[col] = df[col].astype('category').cat.codes
+                df[col] = df[col].replace(-1, np.nan)
 
         if df.shape[0] > 10000:
             st.error(f"Dataset too large! Your file has {df.shape[0]:,} rows. Maximum allowed is 10,000 rows.")
