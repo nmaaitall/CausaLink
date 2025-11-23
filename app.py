@@ -55,6 +55,8 @@ if 'df' in st.session_state and st.session_state['df'] is not None:
     st.sidebar.success("Dataset loaded")
     st.sidebar.metric("Rows", f"{st.session_state['df'].shape[0]:,}")
     st.sidebar.metric("Columns", st.session_state['df'].shape[1])
+    numeric_count = len(st.session_state['df'].select_dtypes(include=[np.number]).columns)
+    st.sidebar.metric("Numeric Columns", numeric_count)
 
 if page == "Data Upload":
     st.header("Step 1: Upload Your Dataset")
@@ -63,8 +65,7 @@ if page == "Data Upload":
         st.write("- File format: CSV")
         st.write("- Maximum 10,000 rows")
         st.write("- Maximum 50 columns")
-        st.write("- At least 2 numeric columns required")
-        st.write("- Text columns will be automatically converted to numeric")
+        st.write("- Text columns will be automatically converted to numeric codes")
 
     uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
@@ -76,6 +77,8 @@ if page == "Data Upload":
 
         df = df.dropna(axis=1, how='all')
 
+        original_types = df.dtypes.to_dict()
+
         for col in df.columns:
             if df[col].dtype == 'object':
                 try:
@@ -85,8 +88,8 @@ if page == "Data Upload":
 
         for col in df.columns:
             if df[col].dtype == 'object':
-                df[col] = df[col].astype('category').cat.codes
-                df[col] = df[col].replace(-1, np.nan)
+                df[col] = df[col].astype('category').cat.codes.astype('float64')
+                df[col] = df[col].replace(-1.0, np.nan)
 
         if df.shape[0] > 10000:
             st.error(f"Dataset too large! Your file has {df.shape[0]:,} rows. Maximum allowed is 10,000 rows.")
@@ -97,8 +100,9 @@ if page == "Data Upload":
         else:
             st.session_state['df'] = df
             st.session_state['original_df'] = df.copy()
+            st.session_state['original_types'] = original_types
 
-            st.success("File uploaded successfully!")
+            st.success("File uploaded successfully! Text columns converted to numeric codes.")
 
             col1, col2, col3, col4 = st.columns(4)
             with col1:
@@ -111,7 +115,7 @@ if page == "Data Upload":
                 numeric_count = len(df.select_dtypes(include=[np.number]).columns)
                 st.metric("Numeric Columns", numeric_count)
 
-            st.write("Dataset Preview (Excel-style):")
+            st.write("Dataset Preview:")
             st.dataframe(
                 df.head(20),
                 use_container_width=True,
@@ -121,17 +125,24 @@ if page == "Data Upload":
             st.write("Column Information:")
             col_info = []
             for col in df.columns:
+                original_type = str(original_types.get(col, 'unknown'))
+                current_type = str(df[col].dtype)
+                converted = "(converted)" if original_type == 'object' and current_type != 'object' else ""
+
                 col_info.append({
-                    'Column Name': col,
-                    'Data Type': str(df[col].dtype),
+                    'Column': col,
+                    'Original Type': original_type,
+                    'Current Type': current_type + " " + converted,
                     'Non-Null': df[col].count(),
                     'Null': df[col].isnull().sum(),
-                    'Unique': df[col].nunique(),
-                    'Sample Values': str(df[col].dropna().head(3).tolist())[:50] + '...'
+                    'Unique': df[col].nunique()
                 })
 
             col_info_df = pd.DataFrame(col_info)
             st.dataframe(col_info_df, use_container_width=True, height=400)
+
+            if any('converted' in str(x) for x in col_info_df['Current Type']):
+                st.info("Text columns were automatically converted to numeric codes for analysis.")
 
     elif 'df' in st.session_state and st.session_state['df'] is not None:
         st.info("Dataset already loaded. Upload a new file to replace it.")
@@ -212,7 +223,7 @@ elif page == "Data Exploration":
                     ax.set_title(f"Box Plot of {selected_col}")
                     st.pyplot(fig)
             else:
-                st.error("No numeric columns found. Please check your dataset or convert columns to numeric type.")
+                st.error("No numeric columns found.")
 
         with tab3:
             st.write("Correlation Analysis:")
@@ -277,8 +288,8 @@ elif page == "Causal Analysis":
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
 
         if len(numeric_cols) < 2:
-            st.error(
-                "Need at least 2 numeric columns for causal analysis. Please ensure your dataset has numeric values.")
+            st.error("Need at least 2 numeric columns for causal analysis.")
+            st.info("Your dataset needs numeric columns. Text columns should be automatically converted on upload.")
         else:
             col1, col2 = st.columns([2, 1])
 
